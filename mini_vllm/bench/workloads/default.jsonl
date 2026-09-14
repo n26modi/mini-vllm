@@ -1,0 +1,5 @@
+{"prompt": "Explain the difference between supervised and unsupervised learning.", "max_new_tokens": 128}
+{"prompt": "What is the capital of France?", "max_new_tokens": 32}
+{"prompt": "Write a Python function that computes the Fibonacci sequence.", "max_new_tokens": 256}
+{"prompt": "What are the main causes of the French Revolution?", "max_new_tokens": 200}
+{"prompt": "Describe how transformers work in natural language processing.", "max_new_tokens": 300}
