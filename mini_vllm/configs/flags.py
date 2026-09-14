@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
@@ -10,7 +13,7 @@ class EngineConfig:
     prefix_cache: str = "off"          # "off" | "hash" | "radix"
     batching: str = "static"           # "static" | "continuous"
     decoding: str = "standard"         # "standard" | "speculative"
-    spec_method: str | None = None     # "draft_verify" | "medusa" | "lookahead" | "eagle"
+    spec_method: Optional[str] = None  # "draft_verify" | "medusa" | "lookahead" | "eagle"
     use_lora: bool = False
     compiled: bool = False
     disaggregated: bool = False

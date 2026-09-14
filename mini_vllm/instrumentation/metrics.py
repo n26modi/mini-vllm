@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import time
 from dataclasses import dataclass, asdict
@@ -30,7 +32,7 @@ class RequestMetrics:
 
 
 class MetricsLogger:
-    def __init__(self, output_path: str | Path):
+    def __init__(self, output_path: "str | Path"):
         self.path = Path(output_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._file = self.path.open("a")

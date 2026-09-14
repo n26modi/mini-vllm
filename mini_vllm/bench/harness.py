@@ -4,6 +4,7 @@ Benchmark harness — runs a workload against the engine and emits one ablation 
 Usage:
     python -m mini_vllm.bench.harness --config default --workload bench/workloads/default.jsonl
 """
+from __future__ import annotations
 
 import argparse
 import json
@@ -31,7 +32,7 @@ def _stub_engine(config: EngineConfig, prompt: str, max_new_tokens: int) -> Requ
     )
 
 
-def run(config: EngineConfig, workload_path: str | Path, output_path: str | Path) -> None:
+def run(config: EngineConfig, workload_path: "str | Path", output_path: "str | Path") -> None:
     workload = [json.loads(l) for l in Path(workload_path).read_text().splitlines() if l.strip()]
 
     results: list[RequestMetrics] = []
