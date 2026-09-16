@@ -26,7 +26,7 @@ class NaiveEngine:
         print(f"Loading {MODEL_ID} on {self.device} ...")
         self.tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
         self.model = AutoModelForCausalLM.from_pretrained(
-            MODEL_ID, torch_dtype=torch.bfloat16
+            MODEL_ID, dtype=torch.bfloat16
         ).to(self.device)
         self.model.eval()
         print("Ready.")
@@ -105,7 +105,7 @@ class NaiveEngine:
 
         for _ in range(max_new_tokens):
             ids = torch.tensor([seq], dtype=torch.long, device=self.device)
-            logits = self.model(ids).logits[0, -1].float()
+            logits = self.model(ids).logits[0, -1]
             next_token = int(logits.argmax().item())
             seq.append(next_token)
             if next_token == eos_id:

@@ -25,6 +25,7 @@ def hf_greedy(tokenizer, model, prompt: str, max_new_tokens: int, device: str) -
             do_sample=False,
             temperature=None,
             top_p=None,
+            use_cache=False,  # match naive engine: full recompute every step
         )
     return out[0, input_ids.shape[1]:].tolist()
 
