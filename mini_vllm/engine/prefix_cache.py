@@ -9,15 +9,15 @@ from transformers import DynamicCache
 
 
 def _hash_chunk(token_ids: list[int]) -> str:
-    return hashlib.md5(bytes(token_ids)).hexdigest()
+    import struct
+    return hashlib.md5(struct.pack(f"{len(token_ids)}I", *token_ids)).hexdigest()
 
 
 def _slice_cache(cache: DynamicCache, end: int) -> DynamicCache:
     """Return a new DynamicCache containing only positions [:end]."""
     sliced = DynamicCache()
-    for k, v in zip(cache.key_cache, cache.value_cache):
-        sliced.key_cache.append(k[:, :, :end, :].clone())
-        sliced.value_cache.append(v[:, :, :end, :].clone())
+    for i, layer in enumerate(cache.layers):
+        sliced.update(layer.keys[:, :, :end, :].clone(), layer.values[:, :, :end, :].clone(), layer_idx=i)
     return sliced
 
 
@@ -80,68 +80,76 @@ class RadixNode:
     __slots__ = ("children", "kv_ref", "last_used", "n_tokens")
 
     def __init__(self):
-        self.children: dict[int, RadixNode] = {}
-        self.kv_ref: Optional[DynamicCache] = None  # KV for this node's prefix
+        self.children: dict[tuple, RadixNode] = {}  # key: token block tuple
+        self.kv_ref: Optional[DynamicCache] = None  # KV at this block boundary
         self.last_used: float = 0.0
-        self.n_tokens: int = 0  # number of tokens represented by this node's prefix
+        self.n_tokens: int = 0  # cumulative tokens up to this node
 
 
 class RadixCache:
-    """Radix trie keyed on token sequences with LRU eviction on leaves.
+    """Radix trie keyed on token blocks with LRU eviction on leaves.
 
-    Shared prefixes map to shared trie paths. Evicting a leaf never
-    disturbs a prefix shared by another active branch — unlike a flat
-    hash map where evicting a hash entry can break a shared prefix.
+    Nodes represent fixed-size token blocks (block_size tokens each).
+    Shared prefixes map to shared trie paths — evicting a leaf never
+    disturbs a shared ancestor, unlike a flat hash map.
+    Only stores one KV slice per node (block boundary), not per token,
+    so memory usage is O(n / block_size) not O(n).
     """
 
-    def __init__(self, max_tokens: int = 8192):
+    def __init__(self, max_tokens: int = 8192, block_size: int = 16):
         self.root = RadixNode()
         self.max_tokens = max_tokens
+        self.block_size = block_size
         self._total_tokens = 0
 
     def lookup(self, token_ids: list[int]) -> tuple[Optional[DynamicCache], int]:
-        """Walk trie matching token_ids. Return best prefix cache + match length."""
+        """Walk trie block by block. Return best prefix cache + match length."""
         node = self.root
-        matched = 0
         best_cache = None
         best_matched = 0
+        n_blocks = len(token_ids) // self.block_size
 
-        for tok in token_ids:
-            if tok not in node.children:
+        for b in range(n_blocks):
+            block = tuple(token_ids[b * self.block_size : (b + 1) * self.block_size])
+            if block not in node.children:
                 break
-            node = node.children[tok]
+            node = node.children[block]
             node.last_used = time.time()
-            matched += 1
             if node.kv_ref is not None:
                 best_cache = node.kv_ref
-                best_matched = matched
+                best_matched = (b + 1) * self.block_size
 
         return best_cache, best_matched
 
-    def insert(self, token_ids: list[int], full_cache: DynamicCache):
-        """Insert the full token sequence into the trie, storing KV slices at each node."""
-        self._evict_if_needed(len(token_ids))
+    def store(self, token_ids: list[int], full_cache: DynamicCache):
+        n_blocks = len(token_ids) // self.block_size
+        if n_blocks == 0:
+            return
+        self._evict_if_needed(n_blocks)
 
         node = self.root
-        for i, tok in enumerate(token_ids):
-            if tok not in node.children:
+        for b in range(n_blocks):
+            block = tuple(token_ids[b * self.block_size : (b + 1) * self.block_size])
+            if block not in node.children:
                 child = RadixNode()
-                child.n_tokens = i + 1
-                node.children[tok] = child
-            node = node.children[tok]
+                child.n_tokens = (b + 1) * self.block_size
+                node.children[block] = child
+            node = node.children[block]
             node.last_used = time.time()
             if node.kv_ref is None:
-                node.kv_ref = _slice_cache(full_cache, i + 1)
-                self._total_tokens += 1
+                end = (b + 1) * self.block_size
+                node.kv_ref = _slice_cache(full_cache, end)
+                self._total_tokens += self.block_size
 
-    def _evict_if_needed(self, incoming: int):
+    def _evict_if_needed(self, incoming_blocks: int):
         """LRU eviction on leaf nodes until we have room."""
-        while self._total_tokens + incoming > self.max_tokens:
+        incoming_tokens = incoming_blocks * self.block_size
+        while self._total_tokens + incoming_tokens > self.max_tokens:
             leaf = self._find_lru_leaf(self.root)
             if leaf is None:
                 break
             leaf.kv_ref = None
-            self._total_tokens -= 1
+            self._total_tokens -= self.block_size
 
     def _find_lru_leaf(self, node: RadixNode) -> Optional[RadixNode]:
         if not node.children:

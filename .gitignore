@@ -16,6 +16,7 @@ env/
 results/
 *.jsonl
 !mini_vllm/bench/workloads/default.jsonl
+!mini_vllm/bench/workloads/ablation.jsonl
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

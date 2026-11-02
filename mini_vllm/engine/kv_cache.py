@@ -30,20 +30,20 @@ def compress_cache(cache: DynamicCache, bits: int) -> DynamicCache:
     require storing int8 and dequantizing at attention time (needs custom kernel).
     This measures the quality impact instead.
     """
-    if not cache.key_cache:
+    if not cache.layers:
         return cache
-    dtype = cache.key_cache[0].dtype
-    for i in range(len(cache.key_cache)):
-        k_q, k_min, k_sc = _quantize(cache.key_cache[i].float(), bits)
-        v_q, v_min, v_sc = _quantize(cache.value_cache[i].float(), bits)
-        cache.key_cache[i] = _dequantize(k_q, k_min, k_sc, dtype)
-        cache.value_cache[i] = _dequantize(v_q, v_min, v_sc, dtype)
+    dtype = cache.layers[0].keys.dtype
+    for layer in cache.layers:
+        k_q, k_min, k_sc = _quantize(layer.keys.float(), bits)
+        v_q, v_min, v_sc = _quantize(layer.values.float(), bits)
+        layer.keys = _dequantize(k_q, k_min, k_sc, dtype)
+        layer.values = _dequantize(v_q, v_min, v_sc, dtype)
     return cache
 
 
 def cache_bytes(cache: DynamicCache, bits: int = 16) -> int:
     """Bytes the KV cache would occupy at a given bit width."""
-    total = sum(k.numel() + v.numel() for k, v in zip(cache.key_cache, cache.value_cache))
+    total = sum(layer.keys.numel() + layer.values.numel() for layer in cache.layers)
     return total * (bits // 8)
 
 
@@ -64,13 +64,13 @@ def evict_h2o(
     budget: max KV entries to keep.
     recent_window: always keep the last N tokens regardless of score.
     """
-    if not cache.key_cache:
+    if not cache.layers:
         return cache
-    seq_len = cache.key_cache[0].shape[2]
+    seq_len = cache.layers[0].keys.shape[2]
     if seq_len <= budget:
         return cache
 
-    device = cache.key_cache[0].device
+    device = cache.layers[0].keys.device
     scores = torch.zeros(seq_len, device=device)
     for w in attn_weights:
         if w is None:
@@ -83,9 +83,9 @@ def evict_h2o(
     _, keep_idx = scores.topk(min(budget, seq_len))
     keep_idx = keep_idx.sort().values
 
-    for i in range(len(cache.key_cache)):
-        cache.key_cache[i] = cache.key_cache[i][:, :, keep_idx, :]
-        cache.value_cache[i] = cache.value_cache[i][:, :, keep_idx, :]
+    for layer in cache.layers:
+        layer.keys = layer.keys[:, :, keep_idx, :]
+        layer.values = layer.values[:, :, keep_idx, :]
     return cache
 
 
@@ -104,13 +104,13 @@ def evict_snapkv(
     Unlike H2O (global accumulation), SnapKV re-evaluates which positions
     the current queries care about — adapts to topic shifts mid-generation.
     """
-    if not cache.key_cache:
+    if not cache.layers:
         return cache
-    seq_len = cache.key_cache[0].shape[2]
+    seq_len = cache.layers[0].keys.shape[2]
     if seq_len <= budget:
         return cache
 
-    device = cache.key_cache[0].device
+    device = cache.layers[0].keys.device
     scores = torch.zeros(seq_len, device=device)
     for w in attn_weights:
         if w is None:
@@ -121,9 +121,9 @@ def evict_snapkv(
     _, keep_idx = scores.topk(min(budget, seq_len))
     keep_idx = keep_idx.sort().values
 
-    for i in range(len(cache.key_cache)):
-        cache.key_cache[i] = cache.key_cache[i][:, :, keep_idx, :]
-        cache.value_cache[i] = cache.value_cache[i][:, :, keep_idx, :]
+    for layer in cache.layers:
+        layer.keys = layer.keys[:, :, keep_idx, :]
+        layer.values = layer.values[:, :, keep_idx, :]
     return cache
 
 
