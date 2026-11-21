@@ -22,16 +22,30 @@ from mini_vllm.instrumentation.metrics import RequestMetrics
 
 
 CONFIGS: list[tuple[str, EngineConfig]] = [
+    # Phase 1 baseline
     ("baseline",             EngineConfig()),
+
+    # Phase 4 — KV cache compression
     ("kv_quant_8bit",        EngineConfig(kv_quant_bits=8)),
     ("kv_quant_4bit",        EngineConfig(kv_quant_bits=4)),
     ("eviction_h2o",         EngineConfig(eviction="h2o")),
     ("eviction_snapkv",      EngineConfig(eviction="snapkv")),
+
+    # Phase 2 — prefix caching
     ("prefix_hash",          EngineConfig(prefix_cache="hash")),
     ("prefix_radix",         EngineConfig(prefix_cache="radix")),
+
+    # Phase 4 cross-phase
     ("quant8_h2o",           EngineConfig(kv_quant_bits=8, eviction="h2o")),
     ("quant4_snapkv",        EngineConfig(kv_quant_bits=4, eviction="snapkv")),
     ("quant8_radix",         EngineConfig(kv_quant_bits=8, prefix_cache="radix")),
+
+    # Phase 5 — speculative decoding (lookahead, no draft model required)
+    ("spec_lookahead",       EngineConfig(decoding="speculative", spec_method="lookahead")),
+
+    # Phase 5 × Phase 4 cross-phase: does KV compression hurt n-gram acceptance?
+    ("spec_lookahead_q8",    EngineConfig(decoding="speculative", spec_method="lookahead", kv_quant_bits=8)),
+    ("spec_lookahead_q4",    EngineConfig(decoding="speculative", spec_method="lookahead", kv_quant_bits=4)),
 ]
 
 

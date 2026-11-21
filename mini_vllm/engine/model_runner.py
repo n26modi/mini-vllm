@@ -124,11 +124,36 @@ class CachedEngine:
         self.config = config
         self.device = "mps" if torch.backends.mps.is_available() else "cpu"
 
+        if config.cache_backend == "mla":
+            raise NotImplementedError(
+                "cache_backend='mla' requires running the TransMLA converter on the model weights. "
+                "See engine/kv_cache.py:MLACache and https://github.com/bet0x/transmla-converter"
+            )
+        if config.weight_quant_bits < 16:
+            raise NotImplementedError(
+                "weight_quant_bits<16 would mutate the shared model singleton in this process. "
+                "Run weight quantization in isolation via kernels/matmul_triton.py:quantize_weights_int8."
+            )
+        if config.use_lora:
+            raise NotImplementedError(
+                "use_lora=True requires pre-registered adapters. "
+                "Use engine/lora.py:LoRAPool directly."
+            )
+        if config.disaggregated:
+            raise NotImplementedError(
+                "disaggregated=True is a serving-level feature. "
+                "Use serving/disagg.py:DisaggregatedEngine directly."
+            )
+
         # eager attention needed to get attention weights for eviction
         needs_eager = config.eviction in ("h2o", "snapkv")
         self.model, self.tokenizer = _load_model(self.device, eager=needs_eager)
         self.needs_attn_weights = needs_eager
         self.eos_id = self.tokenizer.eos_token_id
+
+        if config.compiled:
+            from mini_vllm.kernels.matmul_triton import compile_model
+            self.model = compile_model(self.model)
 
         # prefix cache
         if config.prefix_cache == "hash":
@@ -140,6 +165,9 @@ class CachedEngine:
 
         # eviction budget (tokens to keep after eviction)
         self._eviction_budget = 512
+
+        # speculative decoder (lazy init on first generate call)
+        self._spec_decoder = None
 
     # ------------------------------------------------------------------
     # Low-level step interface (used by scheduler)
@@ -244,6 +272,9 @@ class CachedEngine:
         if params is None:
             params = SampleParams()
 
+        if self.config.decoding == "speculative":
+            return self._generate_speculative(prompt, max_new_tokens, params)
+
         request_id = str(uuid.uuid4())
         token_ids = self.tokenizer.encode(prompt)
         generated: list[int] = []
@@ -270,6 +301,83 @@ class CachedEngine:
         wall_time_s = time.perf_counter() - t_start
 
         # store prefix for future requests
+        if self._prefix_cache is not None:
+            self._prefix_cache.store(token_ids, past_kv)
+
+        peak_gb = torch.mps.current_allocated_memory() / 1e9 if self.device == "mps" else 0.0
+        kv_gb = cache_bytes(past_kv, bits=self.config.kv_quant_bits) / 1e9
+
+        return RequestMetrics(
+            request_id=request_id, prompt=prompt, max_new_tokens=max_new_tokens,
+            ttft_ms=ttft_ms, itl_ms_per_token=itl_ms, total_tokens=len(generated),
+            wall_time_s=wall_time_s, gpu_util_pct=0.0, peak_mem_gb=peak_gb + kv_gb,
+        )
+
+    def _generate_speculative(
+        self,
+        prompt: str,
+        max_new_tokens: int,
+        params: Optional[SampleParams],
+    ) -> RequestMetrics:
+        method = self.config.spec_method
+        if method == "lookahead":
+            return self._generate_lookahead(prompt, max_new_tokens, params)
+        elif method == "draft_verify":
+            raise NotImplementedError(
+                "spec_method='draft_verify' requires a compatible draft model. "
+                "See engine/sampler.py:DraftVerifyDecoder."
+            )
+        elif method in ("medusa", "eagle"):
+            raise NotImplementedError(
+                f"spec_method='{method}' requires pre-trained heads for Qwen3-0.6B — "
+                f"none are publicly available. See engine/sampler.py."
+            )
+        else:
+            raise ValueError(f"Unknown spec_method: {method!r}")
+
+    def _generate_lookahead(
+        self,
+        prompt: str,
+        max_new_tokens: int,
+        params: Optional[SampleParams],
+    ) -> RequestMetrics:
+        from mini_vllm.engine.sampler import LookaheadDecoder
+        if self._spec_decoder is None:
+            self._spec_decoder = LookaheadDecoder(self)
+
+        request_id = str(uuid.uuid4())
+        token_ids = self.tokenizer.encode(prompt)
+        generated: list[int] = []
+        itl_ms: list[float] = []
+
+        prefix_kv, prefix_len = None, 0
+        if self._prefix_cache is not None:
+            prefix_kv, prefix_len = self._prefix_cache.lookup(token_ids)
+
+        t_start = time.perf_counter()
+        first_token, past_kv, ttft_ms = self.prefill(
+            token_ids, params, prefix_cache=prefix_kv, prefix_len=prefix_len
+        )
+        generated.append(first_token)
+        all_ids = token_ids + generated
+
+        while len(generated) < max_new_tokens:
+            if generated[-1] == self.eos_id:
+                break
+            t_step = time.perf_counter()
+            new_tokens, past_kv = self._spec_decoder.step(all_ids, past_kv, params)
+            # apply quant to the cache returned by the decoder
+            past_kv = self._apply_cache_ops(past_kv, None)
+            step_ms = (time.perf_counter() - t_step) * 1000 / max(len(new_tokens), 1)
+            for tok in new_tokens:
+                if len(generated) >= max_new_tokens or tok == self.eos_id:
+                    break
+                generated.append(tok)
+                all_ids.append(tok)
+                itl_ms.append(step_ms)
+
+        wall_time_s = time.perf_counter() - t_start
+
         if self._prefix_cache is not None:
             self._prefix_cache.store(token_ids, past_kv)
 
