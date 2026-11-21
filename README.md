@@ -40,7 +40,7 @@ lookahead_8bit              36.7     33.2     30.1        0.00
 lookahead_4bit              36.3     33.5     29.8        0.00
 ```
 
-lookahead gets 61% n-gram acceptance at fp16, but KV quantization drops it to zero — precision noise breaks n-gram matching between requests.
+**lookahead gets 61% n-gram acceptance at fp16, but KV quantization drops it to zero — precision noise breaks n-gram matching between requests.**
 
 ## usage
 
