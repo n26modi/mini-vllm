@@ -8,6 +8,46 @@ A from-scratch LLM inference engine built one optimization at a time. Every tech
 
 ---
 
+## Ablation results
+
+Qwen3-0.6B, M4 Mac Air (MPS), 5 requests, up to 64 new tokens each.
+
+```
+==========================================================
+Day 31 ablation table
+==========================================================
+config                   TTFT ms   ITL ms    tok/s   mem GB
+----------------------------------------------------------
+baseline                   338.3     21.6     35.1    1.211
+kv_quant_8bit               39.1     33.1     30.3    1.207
+kv_quant_4bit               45.0     34.2     29.1    1.204
+eviction_h2o               256.7     40.8     23.7    2.411
+eviction_snapkv             37.8     30.7     32.4    2.411
+prefix_hash                 65.1     25.1     38.3    2.410
+prefix_radix                33.0     25.7     39.2    2.410
+quant8_h2o                  80.7     40.6     24.1    2.407
+quant4_snapkv               43.3     39.4     25.3    2.403
+quant8_radix                65.9     31.0     31.3    2.407
+==========================================================
+```
+
+Speculative decoding × KV compression cross-phase results (8 requests, `results/day25.json`):
+
+```
+config                   TTFT ms   ITL ms    tok/s   acceptance
+----------------------------------------------------------------
+standard_16bit             224.5     21.2     42.6        0.00
+standard_8bit               39.6     33.7     29.8        0.00
+standard_4bit               35.7     30.6     32.6        0.00
+lookahead_16bit             29.4     23.2     43.2        0.61
+lookahead_8bit              36.7     33.2     30.1        0.00
+lookahead_4bit              36.3     33.5     29.8        0.00
+```
+
+Key finding: lookahead decoding achieves 61% n-gram acceptance and +1.4% throughput at 16-bit, but KV quantization drops acceptance to zero — precision noise breaks n-gram matching between requests.
+
+---
+
 ## What's built
 
 | Phase | Technique | Flag | Status |
@@ -93,46 +133,6 @@ config = EngineConfig(
     disaggregated=False,      # use serving/disagg.py:DisaggregatedEngine directly
 )
 ```
-
----
-
-## Ablation results
-
-Qwen3-0.6B, M4 Mac Air (MPS), 5 requests, up to 64 new tokens each.
-
-```
-==========================================================
-Day 31 ablation table
-==========================================================
-config                   TTFT ms   ITL ms    tok/s   mem GB
-----------------------------------------------------------
-baseline                   338.3     21.6     35.1    1.211
-kv_quant_8bit               39.1     33.1     30.3    1.207
-kv_quant_4bit               45.0     34.2     29.1    1.204
-eviction_h2o               256.7     40.8     23.7    2.411
-eviction_snapkv             37.8     30.7     32.4    2.411
-prefix_hash                 65.1     25.1     38.3    2.410
-prefix_radix                33.0     25.7     39.2    2.410
-quant8_h2o                  80.7     40.6     24.1    2.407
-quant4_snapkv               43.3     39.4     25.3    2.403
-quant8_radix                65.9     31.0     31.3    2.407
-==========================================================
-```
-
-Speculative decoding × KV compression cross-phase results (8 requests, results in `results/day25.json`):
-
-```
-config                   TTFT ms   ITL ms    tok/s   acceptance
-----------------------------------------------------------------
-standard_16bit             224.5     21.2     42.6        0.00
-standard_8bit               39.6     33.7     29.8        0.00
-standard_4bit               35.7     30.6     32.6        0.00
-lookahead_16bit             29.4     23.2     43.2        0.61
-lookahead_8bit              36.7     33.2     30.1        0.00
-lookahead_4bit              36.3     33.5     29.8        0.00
-```
-
-Key finding: lookahead decoding achieves 61% n-gram acceptance and +1.4% throughput at 16-bit precision, but KV quantization drops acceptance to zero — the precision noise breaks n-gram matching between requests.
 
 ---
 
