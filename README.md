@@ -1,6 +1,6 @@
 # mini-vllm
 
-A from-scratch LLM inference engine built one optimization at a time. Every technique is a flag on a shared `EngineConfig` dataclass, so a controlled ablation table is the natural output.
+A from-scratch LLM inference engine built one optimization at a time.
 
 **Model:** Qwen3-0.6B  
 **Hardware:** M4 Mac Air (MPS / CPU)  
